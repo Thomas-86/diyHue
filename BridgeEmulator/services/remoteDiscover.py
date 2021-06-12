@@ -12,7 +12,7 @@ def runRemoteDiscover(config):
         try:
             payload = {"id": config["bridgeid"],"internalipaddress": config["ipaddress"],"macaddress": config["mac"],"name": config["name"]}
             response = requests.post(url, timeout=5, json=payload)
-            sleep(30)
+            sleep(60)
         except:
                 logging.debug("remote sever is down")
                 sleep(60) # don't overload the remote server
