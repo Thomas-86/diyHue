@@ -13,7 +13,7 @@ from threading import Thread
 from time import sleep
 from functions.core import nextFreeId
 from datetime import datetime
-from pprint import pprint
+
 logging = logManager.logger.get_logger(__name__)
 
 
@@ -22,7 +22,9 @@ bridgeConfig = configManager.bridgeConfig.yaml_config
 v2Resources = {"light": {}, "scene": {}, "grouped_light": {}, "room": {}, "entertainment": {}, "entertainment_configuration": {}, "zigbee_connectivity": {}, "device": {}}
 
 def getObject(element, v2uuid):
-    if element in v2Resources and v2uuid in v2Resources[element]:
+    if element in ["behavior_instance"]:
+        return bridgeConfig[element][v2uuid]
+    elif element in v2Resources and v2uuid in v2Resources[element]:
         logging.debug("Cache Hit for " + element)
         return v2Resources[element][v2uuid]()
     elif element in ["light", "scene", "grouped_light"]:
@@ -204,6 +206,8 @@ class ClipV2(Resource):
         for key, group in bridgeConfig["groups"].items():
             if group.type == "Room":
                 data.append(group.getV2Room())
+            elif group.type == "Zone":
+                data.append(group.getV2Zone())
         # group
         for key, group in bridgeConfig["groups"].items():
             data.append(group.getV2GroupedLight())
@@ -235,7 +239,7 @@ class ClipV2Resource(Resource):
         elif resource == "zone":
             for key, group in bridgeConfig["groups"].items():
                 if group.type == "Zone":
-                    print("to be defined")
+                    response["data"].append(group.getV2Zone())
         elif resource == "grouped_light":
             for key, group in bridgeConfig["groups"].items():
                 response["data"].append(group.getV2GroupedLight())
@@ -394,6 +398,8 @@ class ClipV2ResourceId(Resource):
         elif resource == "geolocation":
             bridgeConfig["sensors"]["1"].protocol_cfg = {"lat": putDict["latitude"], "long": putDict["longitude"]}
             bridgeConfig["sensors"]["1"].config["configured"] = True
+        elif resource == "behavior_instance":
+            object.update_attr(putDict)
         response = {"data": [{
             "rid": resourceid,
             "rtype": resource
@@ -417,7 +423,8 @@ class ClipV2ResourceId(Resource):
         if "user" not in authorisation:
             return "", 403
         object = getObject(resource, resourceid)
-        if object:
+
+        if hasattr(object, 'getObjectPath'):
             del bridgeConfig[object.getObjectPath()["resource"]][object.getObjectPath()["id"]]
         else:
             del bridgeConfig[resource][resourceid]

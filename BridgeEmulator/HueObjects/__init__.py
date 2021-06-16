@@ -97,6 +97,9 @@ class BehaviorInstance():
 
     def update_attr(self, newdata):
         for key, value in newdata.items():
+            if key == "metadata" and "name" in value:
+                self.name = value["name"]
+                continue
             updateAttribute = getattr(self, key)
             if isinstance(updateAttribute, dict):
                 updateAttribute.update(value)
@@ -177,7 +180,7 @@ class Light():
         for protocol in protocols:
             if "lights.protocols." + self.protocol == protocol.__name__:
                 try:
-                    if self.protocol in ["mi_box", "esphome", "tasmota", "wled"]:
+                    if self.protocol in ["mi_box", "esphome", "tasmota"]:
                         protocol.set_light(self, state, rgb)
                     else:
                         protocol.set_light(self, state)
@@ -483,6 +486,29 @@ class Group():
         result["type"] = "room"
         return result
 
+    def getV2Zone(self):
+        result = {"grouped_services": [], "services": []}
+        result["grouped_services"].append({
+            "rid": self.id_v2,
+            "rtype": "grouped_light"
+
+        })
+        result["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, self.id_v2 + 'zone'))
+        result["id_v1"] = "/groups/" + self.id_v1
+        result["metadata"] = {
+            "archetype": self.icon_class.replace(" ", "_").replace("'", "").lower(),
+            "name": self.name
+        }
+        for light in self.lights:
+            if light():
+                result["services"].append({
+                    "rid": light().id_v2,
+                    "rtype": "light"
+                })
+
+        result["type"] = "zone"
+        return result
+
     def getV2GroupedLight(self):
         result = {}
         result["id"] = self.id_v2
@@ -611,17 +637,19 @@ class Scene():
     def add_light(self, light):
         self.lights.append(light)
 
-    def activate(self, transition={}):
+    def activate(self, data):
         queueState = {}
         for light, state in self.lightstates.items():
             light.state.update(state)
             light.updateLightState(state)
-            if len(transition) > 0:
+            if len(data) > 0:
                 state["transitiontime"] = 0
-                if "seconds" in transition:
-                    state["transitiontime"] += transition["seconds"] * 10
-                if "minutes" in transition:
-                    state["transitiontime"] += transition["minutes"] * 600
+                if "seconds" in data:
+                    state["transitiontime"] += data["seconds"] * 10
+                if "minutes" in data:
+                    state["transitiontime"] += data["minutes"] * 600
+                if "recall" in data and "duration" in data["recall"]:
+                    state["transitiontime"] = int(data["recall"]["duration"] / 100)
             if light.protocol in ["native_multi", "mqtt"]:
                 if light.protocol_cfg["ip"] not in queueState:
                     queueState[light.protocol_cfg["ip"]] = {
