@@ -11,6 +11,7 @@ from ws4py.client.threadedclient import WebSocketClient
 from sensors.discover import addHueMotionSensor
 from functions.core import nextFreeId
 from datetime import datetime
+from time import sleep
 
 bridgeConfig = configManager.bridgeConfig.yaml_config
 logging = logManager.logger.get_logger(__name__)
@@ -55,16 +56,16 @@ def scanDeconz():
                 logging.info("register motion sensor as Philips Motion Sensor")
                 addHueMotionSensor(sensor["name"], "deconz", {"lightSensor": "on", "deconzId": id, "modelid": sensor["modelid"]})
             elif sensor["modelid"] == "lumi.sensor_motion.aq2":
-                if deconz_sensors[sensor]["type"] == "ZHALightLevel":
+                if sensor["type"] == "ZHALightLevel":
                     logging.info("register new Xiaomi light sensor")
-                    lightSensor = {"name": "Hue ambient light " + name[:14], "id_v1": new_sensor_id, "protocol": "deconz", "modelid": "SML001", "type": "ZLLLightLevel", "protocol_cfg": {"deconzId": id}, "uniqueid": "00:17:88:01:02:" + sensor["uniqueid"][12:]}
+                    lightSensor = {"name": "Hue ambient light " + sensor["name"][:14], "id_v1": new_sensor_id, "protocol": "deconz", "modelid": "SML001", "type": "ZLLLightLevel", "protocol_cfg": {"deconzId": id}, "uniqueid": "00:17:88:01:02:" + sensor["uniqueid"][12:]}
                     bridgeConfig["sensors"][new_sensor_id] = HueObjects.Sensor(lightSensor)
-                elif deconz_sensors[sensor]["type"] == "ZHAPresence":
+                elif sensor["type"] == "ZHAPresence":
                     logging.info("register new Xiaomi motion sensor")
                     motion_sensor = {"name": "Hue motion " + sensor["name"][:21], "id_v1": new_sensor_id, "protocol": "deconz", "modelid": "SML001", "type": "ZLLPresence", "protocol_cfg": {"deconzId": id}, "uniqueid": "00:17:88:01:02:" + sensor["uniqueid"][12:]}
                     bridgeConfig["sensors"][new_sensor_id] = HueObjects.Sensor(motion_sensor)
                     new_sensor_id = nextFreeId(bridgeConfig, "sensors")
-                    temp_sensor = {"name": "Hue temperature " + sensor["name"][:16], "id_v1": new_sensor_id, "protocol": "deconz", "modelid": "SML001", "type": "ZLLTemperature", "protocol_cfg": {}, "uniqueid": "00:17:88:01:02:" + sensor["uniqueid"][12:-1] + "2"}
+                    temp_sensor = {"name": "Hue temperature " + sensor["name"][:16], "id_v1": new_sensor_id, "protocol": "deconz", "modelid": "SML001", "type": "ZLLTemperature", "protocol_cfg": {"deconzId": "none", "id_v1": new_sensor_id}, "uniqueid": "00:17:88:01:02:" + sensor["uniqueid"][12:-1] + "2"}
                     bridgeConfig["sensors"][new_sensor_id] = HueObjects.Sensor(temp_sensor)
             elif sensor["modelid"] not in ["PHDL00"]:
                 logging.info("register new sensor " + sensor["name"])
@@ -116,6 +117,12 @@ def websocketClient():
                             lightSensor.state["lastupdated"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
                             if "dark" in message["state"]:
                                 del message["state"]["dark"]
+
+                        if bridgeSensor.modelid == "SML001" and "lightlevel" in message["state"]:
+                            if message["state"][lightlevel] > bridgeSensor.config["tholddark"]:
+                                message["state"]["dark"] = False
+                            else:
+                                message["state"]["dark"] = True
 
                         bridgeSensor.state.update(message["state"])
                         current_time = datetime.now()

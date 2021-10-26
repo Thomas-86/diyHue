@@ -48,17 +48,15 @@ def discover(detectedLights):
             modelid = "LWB010"
             if properties["model"] == "desklamp":
                 modelid = "LTW001"
+            elif properties["model"] in ["ceiling10", "ceiling20", "ceiling4"]:
+                detectedLights.append({"protocol": "yeelight", "name": lightName + '-bg', "modelid": "LCT015", "protocol_cfg": {"ip": properties["ip"], "id": properties["id"] + "bg", "backlight": True, "model": properties["model"]}})
+                modelid = "LWB010" # second light must be CT only
             elif properties["rgb"]:
                 modelid = "LCT015"
             elif properties["ct"]:
                 modelid = "LTW001"
+            detectedLights.append({"protocol": "yeelight", "name": lightName, "modelid": modelid, "protocol_cfg": {"ip": properties["ip"], "id": properties["id"], "backlight": False, "model": properties["model"]}})
 
-            emulatorLightConfig = {
-                "ip": properties["ip"],
-                "id": properties["id"],
-                "protocol": "yeelight",
-                }
-            detectedLights.append({"protocol": "yeelight", "name": lightName, "modelid": modelid, "protocol_cfg": {"ip": properties["ip"], "id": properties["id"], "model": properties["model"]}})
         except socket.timeout:
             logging.debug('Yeelight search end')
             sock.close()
@@ -89,30 +87,33 @@ def set_light(light, data):
     method = 'TCP'
     payload = {}
     transitiontime = 400
+    cmdPrefix = ''
+    if "backlight" in light.protocol_cfg and light.protocol_cfg["backlight"]:
+        cmdPrefix = "bg_"
     if "transitiontime" in data:
         transitiontime = int(data["transitiontime"] * 100)
     for key, value in data.items():
         if key == "on":
             if value:
-                payload["set_power"] = ["on", "smooth", transitiontime]
+                payload[cmdPrefix + "set_power"] = ["on", "smooth", transitiontime]
             else:
-                payload["set_power"] = ["off", "smooth", transitiontime]
+                payload[cmdPrefix + "set_power"] = ["off", "smooth", transitiontime]
         elif key == "bri":
-            payload["set_bright"] = [int(value / 2.55) + 1, "smooth", transitiontime]
+            payload[cmdPrefix + "set_bright"] = [int(value / 2.55) + 1, "smooth", transitiontime]
         elif key == "ct":
             #if ip[:-3] == "201" or ip[:-3] == "202":
             if light.name.find("desklamp") > 0:
                 if value > 369: value = 369
-            payload["set_ct_abx"] = [int((-4800/347) * value + 2989900/347), "smooth", transitiontime]
+            payload[cmdPrefix + "set_ct_abx"] = [int((-4800/347) * value + 2989900/347), "smooth", transitiontime]
         elif key == "hue":
-            payload["set_hsv"] = [int(value / 182), int(light.state["sat"] / 2.54), "smooth", transitiontime]
+            payload[cmdPrefix + "set_hsv"] = [int(value / 182), int(light.state["sat"] / 2.54), "smooth", transitiontime]
         elif key == "sat":
-            payload["set_hsv"] = [int(light.state["hue"] / 182), int(value / 2.54), "smooth", transitiontime]
+            payload[cmdPrefix + "set_hsv"] = [int(light.state["hue"] / 182), int(value / 2.54), "smooth", transitiontime]
         elif key == "xy":
             color = convert_xy(value[0], value[1], light.state["bri"])
-            payload["set_rgb"] = [(color[0] * 65536) + (color[1] * 256) + color[2], "smooth", transitiontime] #according to docs, yeelight needs this to set rgb. its r * 65536 + g * 256 + b
+            payload[cmdPrefix + "set_rgb"] = [(color[0] * 65536) + (color[1] * 256) + color[2], "smooth", transitiontime] #according to docs, yeelight needs this to set rgb. its r * 65536 + g * 256 + b
         elif key == "alert" and value != "none":
-            payload["start_cf"] = [ 4, 0, "1000, 2, 5500, 100, 1000, 2, 5500, 1, 1000, 2, 5500, 100, 1000, 2, 5500, 1"]
+            payload[cmdPrefix + "start_cf"] = [ 4, 0, "1000, 2, 5500, 100, 1000, 2, 5500, 1, 1000, 2, 5500, 100, 1000, 2, 5500, 1"]
 
     # yeelight uses different functions for each action, so it has to check for each function
     # see page 9 http://www.yeelight.com/download/Yeelight_Inter-Operation_Spec.pdf
@@ -133,15 +134,27 @@ def hex_to_rgb(value):
     tup = tuple(int(value[i:i + lv // 3], 16) for i in range(0, lv, lv // 3))
     return list(tup)
 
+def data_to_result(data):
+    return json.loads(data[:-2].decode("utf8"))["result"]
+
+def get_prop_data(tcp_socket, params):
+    params = list(params)
+    msg_dict = {"id": 1, "method": "get_prop", "params": params}
+    msg=json.dumps(msg_dict) + "\r\n"
+    tcp_socket.send(msg.encode())
+    data = tcp_socket.recv(16 * 1024)
+    return data
+
+def calculate_color_temp(value):
+    return int(-(347/4800) * int(value) +(2989900/4800))
+
 def get_light_state(light):
     state = {}
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcp_socket.settimeout(5)
     tcp_socket.connect((light.protocol_cfg["ip"], int(55443)))
-    msg=json.dumps({"id": 1, "method": "get_prop", "params":["power","bright"]}) + "\r\n"
-    tcp_socket.send(msg.encode())
-    data = tcp_socket.recv(16 * 1024)
-    light_data = json.loads(data[:-2].decode("utf8"))["result"]
+    data = get_prop_data(tcp_socket, ["power", "bright"])
+    light_data = data_to_result(data)
     if light_data[0] == "on": #powerstate
         state['on'] = True
     else:
@@ -149,42 +162,31 @@ def get_light_state(light):
     state["bri"] = int(int(light_data[1]) * 2.54)
     #if ip[:-3] == "201" or ip[:-3] == "202":
     if light.name.find("desklamp") > 0:
-        msg_ct=json.dumps({"id": 1, "method": "get_prop", "params":["ct"]}) + "\r\n"
-        tcp_socket.send(msg_ct.encode())
-        data = tcp_socket.recv(16 * 1024)
-        tempval = int(-(347/4800) * int(json.loads(data[:-2].decode("utf8"))["result"][0]) +(2989900/4800))
-        if tempval > 369: tempval = 369
-        state["ct"] = tempval # int(-(347/4800) * int(json.loads(data[:-2].decode("utf8"))["result"][0]) +(2989900/4800))
+        data = get_prop_data(tcp_socket, ["ct"])
+        tempval = calculate_color_temp(data_to_result(data)[0])
+        state["ct"] = min(tempval, 369)
         state["colormode"] = "ct"
     else:
-        msg_mode=json.dumps({"id": 1, "method": "get_prop", "params":["color_mode"]}) + "\r\n"
-        tcp_socket.send(msg_mode.encode())
-        data = tcp_socket.recv(16 * 1024)
-        if json.loads(data[:-2].decode("utf8"))["result"][0] == "1": #rgb mode
-            msg_rgb=json.dumps({"id": 1, "method": "get_prop", "params":["rgb"]}) + "\r\n"
-            tcp_socket.send(msg_rgb.encode())
-            data = tcp_socket.recv(16 * 1024)
-            hue_data = json.loads(data[:-2].decode("utf8"))["result"]
-            hex_rgb = "%6x" % int(json.loads(data[:-2].decode("utf8"))["result"][0])
+        data = get_prop_data(tcp_socket, ["color_mode"])
+        light_mode = data_to_result(data)[0]
+        if light_mode == "1": #rgb mode
+            data = get_prop_data(tcp_socket, ["rgb"])
+            hue_data = data_to_result(data)
+            hex_rgb = "%06x" % int(data_to_result(data)[0])
             rgb=hex_to_rgb(hex_rgb)
             state["xy"] = convert_rgb_xy(rgb[0],rgb[1],rgb[2])
             state["colormode"] = "xy"
-        elif json.loads(data[:-2].decode("utf8"))["result"][0] == "2": #ct mode
-            msg_ct=json.dumps({"id": 1, "method": "get_prop", "params":["ct"]}) + "\r\n"
-            tcp_socket.send(msg_ct.encode())
-            data = tcp_socket.recv(16 * 1024)
-            state["ct"] =  int(-(347/4800) * int(json.loads(data[:-2].decode("utf8"))["result"][0]) +(2989900/4800))
+        elif light_mode == "2": #ct mode
+            data = get_prop_data(tcp_socket, ["ct"])
+            state["ct"] =  calculate_color_temp(data_to_result(data)[0])
             state["colormode"] = "ct"
-        elif json.loads(data[:-2].decode("utf8"))["result"][0] == "3": #hs mode
-            msg_hsv=json.dumps({"id": 1, "method": "get_prop", "params":["hue","sat"]}) + "\r\n"
-            tcp_socket.send(msg_hsv.encode())
-            data = tcp_socket.recv(16 * 1024)
-            hue_data = json.loads(data[:-2].decode("utf8"))["result"]
+        elif light_mode == "3": #hs mode
+            data = get_prop_data(tcp_socket, ["hue", "sat"])
+            hue_data = data_to_result(data)
             state["hue"] = int(int(hue_data[0]) * 182)
             state["sat"] = int(int(hue_data[1]) * 2.54)
             state["colormode"] = "hs"
     tcp_socket.close()
-    light.state.update(state)
     return state
 
 

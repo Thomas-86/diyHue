@@ -15,7 +15,7 @@ def set_light(light, data):
 
 def get_light_state(light):
     state = requests.get("http://"+light.protocol_cfg["ip"]+"/state?light=" + str(light.protocol_cfg["light_nr"]), timeout=3)
-    return json.loads(state.text)
+    return state.json()
 
 
 def generate_light_name(base_name, light_nr):
@@ -45,12 +45,16 @@ def discover(detectedLights, device_ips):
                     if "lights" in device_data:
                         lights = device_data["lights"]
 
+
                     # Add each light to config
                     logging.info("Detected light : " + device_data["name"])
                     for x in range(1, lights + 1):
                         logging.info(device_data['name'])
                         lightName = generate_light_name(device_data['name'], x)
-                        detectedLights.append({"protocol": protocol, "name": lightName, "modelid": device_data["modelid"], "protocol_cfg": {"ip": ip, "version": device_data["version"], "type": device_data["type"], "light_nr": x, "mac": device_data["mac"]}})
+                        protocol_cfg = {"ip": ip, "version": device_data["version"], "type": device_data["type"], "light_nr": x, "mac": device_data["mac"]}
+                        if device_data["modelid"] == "LCX002":
+                            protocol_cfg["points_capable"] = 5
+                        detectedLights.append({"protocol": protocol, "name": lightName, "modelid": device_data["modelid"], "protocol_cfg": protocol_cfg})
 
         except Exception as e:
             logging.info("ip %s is unknown device: %s", ip, e)

@@ -39,7 +39,7 @@ def set_light(light, data):
                 payload["color_temp"] = value
             if key == "hue" or key == "sat":
                 colorFromHsv = True
-            if key == "alert":
+            if key == "alert" and value != "none":
                 payload['alert'] = value
             if key == "transitiontime":
                 payload['transition'] = value / 10
@@ -54,7 +54,7 @@ def set_light(light, data):
     publish.multiple(messages, hostname= light.protocol_cfg["mqtt_server"]["mqttServer"], port= light.protocol_cfg["mqtt_server"]["mqttPort"], auth=auth)
 
 def get_light_state(light):
-    pass
+    return {}
 
 def discover(mqtt_config):
     if mqtt_config["enabled"]:
@@ -62,4 +62,8 @@ def discover(mqtt_config):
         auth = None
         if mqtt_config["mqttUser"] != "" and mqtt_config["mqttPassword"] != "":
             auth = {'username': mqtt_config["mqttUser"], 'password': mqtt_config["mqttPassword"]}
-        publish.single("zigbee2mqtt/bridge/config/devices/get", hostname=mqtt_config["mqttServer"], port=mqtt_config["mqttPort"], auth=auth)
+        try:
+            publish.single("zigbee2mqtt/bridge/request/permit_join", json.dumps({"value": True, "time": 120}), hostname=mqtt_config["mqttServer"], port=mqtt_config["mqttPort"], auth=auth)
+            publish.single("zigbee2mqtt/bridge/config/devices/get", hostname=mqtt_config["mqttServer"], port=mqtt_config["mqttPort"], auth=auth)
+        except Exception as e:
+            print (str(e))

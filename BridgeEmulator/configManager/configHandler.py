@@ -1,13 +1,17 @@
 from configManager import configInit
 from datetime import datetime
-from time import tzset
 import os
 import json
 import logManager
 import yaml
 import uuid
 import weakref
-from HueObjects import Light, Group, Scene, ApiUser, Rule, ResourceLink, Schedule, Sensor, BehaviorInstance
+from HueObjects import Light, Group, EntertainmentConfiguration, Scene, ApiUser, Rule, ResourceLink, Schedule, Sensor, BehaviorInstance
+try:
+    from time import tzset
+except ImportError:
+    tzset = None
+
 logging = logManager.logger.get_logger(__name__)
 
 class NoAliasDumper(yaml.SafeDumper):
@@ -44,9 +48,13 @@ class Config:
                 for user, data in config["whitelist"].items():
                     self.yaml_config["apiUsers"][user] = ApiUser(user, data["name"], data["client_key"], data["create_date"], data["last_use_date"])
                 del config["whitelist"]
+                # updgrade config
+                if "homeassistant" not in config:
+                    config["homeassistant"] = {"enabled": False}
+
                 self.yaml_config["config"] = config
             else:
-                self.yaml_config["config"] = {"Remote API enabled": False, "Hue Essentials key": str(uuid.uuid1()).replace('-', ''), "mqtt":{"enabled":False},"deconz":{"enabled":False},"alarm":{"on":False, "lasttriggered": 0},"apiUsers":{},"apiversion":"1.44.0","name":"DiyHue Bridge","netmask":"255.255.255.0","swversion":"1945091050","timezone":"Europe/London","linkbutton":{"lastlinkbuttonpushed": 1599398980},"users":{"admin@diyhue.org":{"password":"pbkdf2:sha256:150000$bqqXSOkI$199acdaf81c18f6ff2f29296872356f4eb78827784ce4b3f3b6262589c788742"}}, "hue": {}, "tradfri": {}}
+                self.yaml_config["config"] = {"Remote API enabled": False, "Hue Essentials key": str(uuid.uuid1()).replace('-', ''), "mqtt":{"enabled":False},"deconz":{"enabled":False},"alarm":{"enabled": False, "lasttriggered": 0},"apiUsers":{},"apiversion":"1.46.0","name":"DiyHue Bridge","netmask":"255.255.255.0","swversion":"1946157000","timezone":"Europe/London","linkbutton":{"lastlinkbuttonpushed": 1599398980},"users":{"admin@diyhue.org":{"password":"pbkdf2:sha256:150000$bqqXSOkI$199acdaf81c18f6ff2f29296872356f4eb78827784ce4b3f3b6262589c788742"}}, "hue": {}, "tradfri": {}, "tradfri": {}, "homeassistant": {"enabled":False}}
             # load lights
             if os.path.exists(self.configDir + "/lights.yaml"):
                 lights = _open_yaml(self.configDir + "/lights.yaml")
@@ -64,14 +72,17 @@ class Config:
                 groups = _open_yaml(self.configDir + "/groups.yaml")
                 for group, data in groups.items():
                     data["id_v1"] = group
-                    self.yaml_config["groups"][group] = Group(data)
+                    if data["type"] == "Entertainment":
+                        self.yaml_config["groups"][group] = EntertainmentConfiguration(data)
+                        if "locations" in data:
+                            for light, location in data["locations"].items():
+                                lightObj = self.yaml_config["lights"][light]
+                                self.yaml_config["groups"][group].locations[lightObj] = location
+                    else:
+                        self.yaml_config["groups"][group] = Group(data)
                     #   Reference lights objects instead of id's
                     for light in data["lights"]:
                         self.yaml_config["groups"][group].add_light(self.yaml_config["lights"][light])
-                    if "locations" in data:
-                        for light, location in data["locations"].items():
-                            lightObj = self.yaml_config["lights"][light]
-                            self.yaml_config["groups"][group].locations[lightObj] = location
             #scenes
             if os.path.exists(self.configDir + "/scenes.yaml"):
                 scenes = _open_yaml(self.configDir + "/scenes.yaml")
@@ -145,14 +156,15 @@ class Config:
             path = self.configDir + '/backup/'
             if not os.path.exists(path):
                 os.makedirs(path)
-        config = self.yaml_config["config"]
-        config["whitelist"] = {}
-        for user, obj in self.yaml_config["apiUsers"].items():
-            config["whitelist"][user] = obj.save()
-
         if resource in ["all", "config"]:
+            config = self.yaml_config["config"]
+            config["whitelist"] = {}
+            for user, obj in self.yaml_config["apiUsers"].items():
+                config["whitelist"][user] = obj.save()
             _write_yaml(path + "config.yaml", config)
             logging.debug("Dump config file " + path + "config.yaml")
+            if resource == "config":
+                return
         saveResources = []
         if resource == "all":
             saveResources = ["lights", "groups", "scenes", "rules", "resourcelinks", "schedules", "sensors", "behavior_instance"]

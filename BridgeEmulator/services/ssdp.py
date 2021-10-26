@@ -32,9 +32,9 @@ def ssdpSearch(ip, port, mac):
             if data.find("ssdp:discover") != -1:
                 #sleep(random.randrange(1, 10)/10)
                 logging.debug("Sending M-Search response to " + address[0])
-                for x in range(3):                    
-                    sock.sendto(bytes(Response_message + "ST: " + custom_response_message[x]["st"] + "\r\nUSN: " + custom_response_message[x]["usn"] + "\r\n\r\n", "utf8"), address)
-        sleep(0.1)
+                for x in range(3):
+                   sock.sendto(bytes(Response_message + "ST: " + custom_response_message[x]["st"] + "\r\nUSN: " + custom_response_message[x]["usn"] + "\r\n\r\n", "utf8"), address)
+        sleep(0.2)
 
 def ssdpBroadcast(ip, port, mac):
     logging.info("start ssdp broadcast")

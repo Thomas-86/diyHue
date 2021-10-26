@@ -1,6 +1,7 @@
 import logManager
 import configManager
 import json
+import math
 import weakref
 import HueObjects
 import paho.mqtt.client as mqtt
@@ -13,14 +14,34 @@ from sensors.sensor_types import sensorTypes
 from lights.discover import addNewLight
 from functions.rules import rulesProcessor
 
-
-from pprint import pprint
-
 logging = logManager.logger.get_logger(__name__)
 bridgeConfig = configManager.bridgeConfig.yaml_config
+client = mqtt.Client()
 
 devices_ids = {}
 
+# Configuration stuff
+discoveryPrefix = "homeassistant"
+latestStates = {}
+discoveredDevices = {}
+
+
+motionSensors = ["TRADFRI motion sensor", "lumi.sensor_motion.aq2", "lumi.sensor_motion", "SML001"]
+standardSensors = {
+            "TRADFRI remote control": {
+                "dataConversion": {"rootKey": "action", "toggle": {"buttonevent": 1002}, "arrow_right_click": {"buttonevent": 5002}, "arrow_right_hold": {"buttonevent": 5001}, "arrow_left_click": {"buttonevent": 4002}, "arrow_left_hold": {"buttonevent": 4001}, "brightness_up_click": {"buttonevent": 2002}, "brightness_up_hold": {"buttonevent": 2001}, "brightness_down_click": {"buttonevent": 3002}, "brightness_down_hold": {"buttonevent": 3001}, "brightness_up_release": {"buttonevent": 2003},  "brightness_down_release": {"buttonevent": 3003}, "arrow_left_release": {"buttonevent": 4003}, "arrow_right_release": {"buttonevent": 5003}}},
+            "TRADFRI on/off switch": {
+                "dataConversion": {"rootKey": "click", "on": {"buttonevent": 1002}, "off": {"buttonevent": 2002}, "brightness_up": {"buttonevent": 1001}, "brightness_down": {"buttonevent": 2001}, "brightness_stop": {"buttonevent": 3001}}},
+            "TRADFRI wireless dimmer": {
+                "dataConversion": {"rootKey": "action", "rotate_right_quick": {"buttonevent": 1002}, "rotate_right": {"buttonevent": 2002}, "rotate_left": {"buttonevent": 3002}, "rotate_left_quick": {"buttonevent": 4002}, "rotate_stop": {}, "": {}}},
+            "RWL021": {
+                "dataConversion": {"rootKey": "action", "on_press": {"buttonevent": 1002}, "on_hold": {"buttonevent": 1001}, "on_hold_release": {"buttonevent": 1003}, "up_press": {"buttonevent": 2000}, "up_hold": {"buttonevent": 2001}, "up_hold_release": {"buttonevent": 2002}, "down_press": {"buttonevent": 3000}, "down_hold": {"buttonevent": 3001}, "down_hold_release": {"buttonevent": 3002}, "off_press": {"buttonevent": 4000} }},
+            "RWL022": {
+                "dataConversion": {"rootKey": "action", "on_press": {"buttonevent": 1002}, "on_hold": {"buttonevent": 1001}, "on_hold_release": {"buttonevent": 1003}, "up_press": {"buttonevent": 2000}, "up_hold": {"buttonevent": 2001}, "up_hold_release": {"buttonevent": 2002}, "down_press": {"buttonevent": 3000}, "down_hold": {"buttonevent": 3001}, "down_hold_release": {"buttonevent": 3002}, "off_press": {"buttonevent": 4000} }}
+            }
+
+def getClient():
+    return client
 
 def longPressButton(sensor, buttonevent):
     print("running.....")
@@ -55,25 +76,6 @@ def getObject(friendly_name):
                         return device
         logging.debug("Device not found for " + friendly_name)
         return False
-
-client = mqtt.Client()
-
-# Configuration stuff
-discoveryPrefix = "homeassistant"
-latestStates = {}
-discoveredDevices = {}
-
-
-motionSensors = ["TRADFRI motion sensor", "lumi.sensor_motion.aq2", "lumi.sensor_motion", "SML001"]
-standardSensors = {
-            "TRADFRI remote control": {
-                "dataConversion": {"rootKey": "action", "toggle": {"buttonevent": 1002}, "arrow_right_click": {"buttonevent": 5002}, "arrow_right_hold": {"buttonevent": 5001}, "arrow_left_click": {"buttonevent": 4002}, "arrow_left_hold": {"buttonevent": 4001}, "brightness_up_click": {"buttonevent": 2002}, "brightness_up_hold": {"buttonevent": 2001}, "brightness_down_click": {"buttonevent": 3002}, "brightness_down_hold": {"buttonevent": 3001}, "brightness_up_release": {"buttonevent": 2003},  "brightness_down_release": {"buttonevent": 3003}, "arrow_left_release": {"buttonevent": 4003}, "arrow_right_release": {"buttonevent": 5003}}},
-            "TRADFRI on/off switch": {
-                "dataConversion": {"rootKey": "click", "on": {"buttonevent": 1002}, "off": {"buttonevent": 2002}, "brightness_up": {"buttonevent": 1001}, "brightness_down": {"buttonevent": 2001}, "brightness_stop": {"buttonevent": 3001}}},
-            "TRADFRI wireless dimmer": {
-                "dataConversion": {"rootKey": "action", "rotate_right_quick": {"buttonevent": 1002}, "rotate_right": {"buttonevent": 2002}, "rotate_left": {"buttonevent": 3002}, "rotate_left_quick": {"buttonevent": 4002}, "rotate_stop": {}, "": {}}}
-            }
-
 
 # Will get called zero or more times depending on how many lights are available for autodiscovery
 def on_autodiscovery_light(msg):
@@ -137,89 +139,103 @@ def on_message(client, userdata, msg):
             logging.debug(msg.payload)
             if msg.topic.startswith(discoveryPrefix + "/light/"):
                 on_autodiscovery_light(msg)
-            elif msg.topic == "zigbee2mqtt/bridge/config/devices":
+            elif msg.topic == "zigbee2mqtt/bridge/devices":
                 for key in data:
-                    if "modelID" in key and (key["modelID"] in standardSensors or key["modelID"] in motionSensors): # Sensor is supported
+                    if "model_id" in key and (key["model_id"] in standardSensors or key["model_id"] in motionSensors): # Sensor is supported
                         if getObject(key["friendly_name"]) == False: ## Add the new sensor
                             logging.info("MQTT: Add new mqtt sensor " + key["friendly_name"])
-                            if key["modelID"] in standardSensors:
+                            if key["model_id"] in standardSensors:
                                 new_sensor_id = nextFreeId(bridgeConfig, "sensors")
-                                sensor_type = list(sensorTypes[key["modelID"]].keys())[0]
-                                uniqueid = convertHexToMac(key["ieeeAddr"]) + "-01-1000"
-                                sensorData = {"name": key["friendly_name"], "protocol": "mqtt", "modelid": key["modelID"], "type": sensor_type, "uniqueid": uniqueid,"protocol_cfg": {"friendly_name": key["friendly_name"], "ieeeAddr": key["ieeeAddr"], "model": key["model"]}, "id_v1": new_sensor_id}
+                                sensor_type = list(sensorTypes[key["model_id"]].keys())[0]
+                                uniqueid = convertHexToMac(key["ieee_address"]) + "-01-1000"
+                                sensorData = {"name": key["friendly_name"], "protocol": "mqtt", "modelid": key["model_id"], "type": sensor_type, "uniqueid": uniqueid,"protocol_cfg": {"friendly_name": key["friendly_name"], "ieeeAddr": key["ieee_address"], "model": key["definition"]["model"]}, "id_v1": new_sensor_id}
                                 bridgeConfig["sensors"][new_sensor_id] = HueObjects.Sensor(sensorData)
                             ### TRADFRI Motion Sensor, Xiaomi motion sensor, etc
-                            elif key["modelID"] in motionSensors:
-                                    logging.info("MQTT: add new motion sensor " + key["modelID"])
-                                    addHueMotionSensor(key["friendly_name"], "mqtt", {"modelid": key["modelID"], "lightSensor": "on", "friendly_name": key["friendly_name"]})
+                            elif key["model_id"] in motionSensors:
+                                    logging.info("MQTT: add new motion sensor " + key["model_id"])
+                                    addHueMotionSensor(key["friendly_name"], "mqtt", {"modelid": key["model_id"], "lightSensor": "on", "friendly_name": key["friendly_name"]})
                             else:
-                                logging.info("MQTT: unsupported sensor " + key["modelID"])
+                                logging.info("MQTT: unsupported sensor " + key["model_id"])
             elif msg.topic == "zigbee2mqtt/bridge/log":
+                light = getObject(data["meta"]["friendly_name"])
                 if data["type"] == "device_announced":
-                    light = getObject(data["meta"]["friendly_name"])
                     if light.config["startup"]["mode"] == "powerfail":
                         logging.info("set last state for " + light.name)
                         payload = {}
                         payload["state"] = "ON" if light.state["on"] else "OFF"
                         client.publish(light.protocol_cfg['command_topic'], json.dumps(payload))
-
+                elif data["type"] == "zigbee_publish_error":
+                    logging.info(light.name + " is unreachable")
+                    light.state["reachable"] = False
             else:
-                device = msg.topic.split("/")[1]
-                sensor = getObject(device)
-                if sensor != False:
-                    if "battery" in data:
-                        sensor.config["battery"] = int(data["battery"])
-                    if sensor.config["on"] == False:
-                        return
-                    convertedPayload = {"lastupdated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")}
-                    if ("action" in data and data["action"] == "") or ("click" in data and data["click"] == ""):
-                        return
-                    ### If is a motion sensor update the light level and temperature
-                    if sensor.modelid in motionSensors:
-                        convertedPayload["presence"] = data["occupancy"]
-                        lightPayload = {"lastupdated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")}
-                        lightSensor = findLightSensor(sensor)
-                        if "temperature" in data:
-                            tempSensor = findTempSensor(sensor)
-                            tempSensor.state = {"temperature": int(data["temperature"] * 100), "lastupdated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")}
-                        if "illuminance" in data:
-                            if data["illuminance"] > 10:
-                                lightPayload["dark"] = False
-                            else:
+                device_friendlyname = msg.topic.split("/")[1]
+                device = getObject(device_friendlyname)
+                if device != False:
+                    if device.getObjectPath()["resource"] == "sensors":
+                        if "battery" in data and isinstance(data["battery"], int):
+                            device.config["battery"] = data["battery"]
+                        if device.config["on"] == False:
+                            return
+                        convertedPayload = {"lastupdated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")}
+                        if ("action" in data and data["action"] == "") or ("click" in data and data["click"] == ""):
+                            return
+                        ### If is a motion sensor update the light level and temperature
+                        if device.modelid in motionSensors:
+                            convertedPayload["presence"] = data["occupancy"]
+                            lightPayload = {"lastupdated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")}
+                            lightSensor = findLightSensor(device)
+                            if "temperature" in data:
+                                tempSensor = findTempSensor(device)
+                                tempSensor.state = {"temperature": int(data["temperature"] * 100), "lastupdated": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")}
+                            if "illuminance_lux" in data:
+                                hue_lightlevel = int(10000 * math.log10(data["illuminance_lux"])) if data["illuminance_lux"] != 0 else 0
+                                if hue_lightlevel > lightSensor.config["tholddark"]:
+                                    lightPayload["dark"] = False
+                                else:
+                                    lightPayload["dark"] = True
+                                lightPayload["lightlevel"] = hue_lightlevel
+                            elif lightSensor.protocol_cfg["lightSensor"] == "on":
+                                lightPayload["dark"] = not bridgeConfig["sensors"]["1"].state["daylight"]
+                                if  lightPayload["dark"]:
+                                    lightPayload["lightlevel"] = 6000
+                                else:
+                                    lightPayload["lightlevel"] = 25000
+                            else: # is always dark
                                 lightPayload["dark"] = True
-                        elif lightSensor.protocol_cfg["lightSensor"] == "on":
-                            lightPayload["dark"] = not bridgeConfig["sensors"]["1"].state["daylight"]
-                        else: # is always dark
-                            lightPayload["dark"] = True
-
-                        if  lightPayload["dark"]:
-                            lightPayload["lightlevel"] = 6000
-                        else:
-                            lightPayload["lightlevel"] = 25000
-                        lightPayload["daylight"] = not lightPayload["dark"]
-                        if lightPayload["dark"] != lightSensor.state["dark"]:
-                            lightSensor.dxState["dark"] = current_time
-                        lightSensor.state.update(lightPayload)
-                        # send email if alarm is enabled:
-                        if data["occupancy"] and bridgeConfig["config"]["alarm"]["enabled"] and bridgeConfig["config"]["alarm"]["lasttriggered"] + 300 < current_time.timestamp():
-                            logging.info("Alarm triggered, sending email...")
-                            requests.post("https://diyhue.org/cdn/mailNotify.php", json={"to": bridgeConfig["config"]["alarm"]["email"], "sensor": sensor.name}, timeout=10)
-                            bridgeConfig["config"]["alarm"]["lasttriggered"] = int(current_time.timestamp())
-                    elif sensor.modelid in standardSensors:
-                        convertedPayload.update(standardSensors[sensor.modelid]["dataConversion"][data[standardSensors[sensor.modelid]["dataConversion"]["rootKey"]]])
-                    for key in convertedPayload.keys():
-                        if sensor.state[key] != convertedPayload[key]:
-                            sensor.dxState[key] = current_time
-                    sensor.state.update(convertedPayload)
-                    logging.debug(convertedPayload)
-                    if "buttonevent" in  convertedPayload and convertedPayload["buttonevent"] in [1001, 2001, 3001, 4001, 5001]:
-                        Thread(target=longPressButton, args=[sensor, convertedPayload["buttonevent"]]).start()
-                    rulesProcessor(sensor, current_time)
+                                lightPayload["lightlevel"] = 6000
+                            lightPayload["daylight"] = not lightPayload["dark"]
+                            if lightPayload["dark"] != lightSensor.state["dark"]:
+                                lightSensor.dxState["dark"] = current_time
+                            lightSensor.state.update(lightPayload)
+                            # send email if alarm is enabled:
+                            if data["occupancy"] and bridgeConfig["config"]["alarm"]["enabled"] and bridgeConfig["config"]["alarm"]["lasttriggered"] + 300 < current_time.timestamp():
+                                logging.info("Alarm triggered, sending email...")
+                                requests.post("https://diyhue.org/cdn/mailNotify.php", json={"to": bridgeConfig["config"]["alarm"]["email"], "sensor": device.name}, timeout=10)
+                                bridgeConfig["config"]["alarm"]["lasttriggered"] = int(current_time.timestamp())
+                        elif device.modelid in standardSensors:
+                            convertedPayload.update(standardSensors[device.modelid]["dataConversion"][data[standardSensors[device.modelid]["dataConversion"]["rootKey"]]])
+                        for key in convertedPayload.keys():
+                            if device.state[key] != convertedPayload[key]:
+                                device.dxState[key] = current_time
+                        device.state.update(convertedPayload)
+                        logging.debug(convertedPayload)
+                        if "buttonevent" in  convertedPayload and convertedPayload["buttonevent"] in [1001, 2001, 3001, 4001, 5001]:
+                            Thread(target=longPressButton, args=[device, convertedPayload["buttonevent"]]).start()
+                        rulesProcessor(device, current_time)
+                    elif device.getObjectPath()["resource"] == "lights":
+                        state = {}
+                        if "state" in data:
+                            if data["state"] == "ON":
+                                state["on"] = True
+                            else:
+                                state["on"] = False
+                        if "brightness" in data:
+                            state["bri"] = data["brightness"]
+                        device.state.update(state)
 
                 on_state_update(msg)
-        except:
-            traceback.print_exc()
-            #quit(0)
+        except Exception as e:
+            logging.info("MQTT Exception | " + str(e))
 
 def findLightSensor(sensor):
     lightSensorUID = sensor.uniqueid[:-1] + "0"
@@ -248,7 +264,7 @@ def on_connect(client, userdata, flags, rc):
     autodiscoveryTopic = discoveryPrefix + "/light/+/light/config" # + in topic is wildcard
     client.subscribe(autodiscoveryTopic)
     client.subscribe("zigbee2mqtt/+")
-    client.subscribe("zigbee2mqtt/bridge/config/devices")
+    client.subscribe("zigbee2mqtt/bridge/devices")
     client.subscribe("zigbee2mqtt/bridge/log")
 
 def mqttServer():
